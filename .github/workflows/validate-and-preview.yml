@@ -1,0 +1,60 @@
+name: Validate and preview release
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: veyra-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  package-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify bundled installer
+        run: python3 tests/verify-package.py
+  windows-parser:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Parse Windows PowerShell 5.1 source and installer
+        shell: powershell
+        run: |
+          $errors = $null
+          $tokens = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("src/VeyraConnect.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | Format-List; throw "PowerShell file parsing failed" }
+          $lines = [IO.File]::ReadAllLines((Resolve-Path "VeyraConnect_Kur.bat"), [Text.Encoding]::UTF8)
+          $mark = [Array]::IndexOf($lines, ":__VEYRA_PS_PAYLOAD__")
+          if ($mark -lt 0) { throw "Missing payload" }
+          $payload = ([string[]]$lines[($mark+1)..($lines.Length-1)]) -join [Environment]::NewLine
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseInput($payload, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | Format-List; throw "Embedded PowerShell parsing failed" }
+          Write-Host "Windows PowerShell 5.1 parsing PASS"
+  publish-preview:
+    needs: [package-check, windows-parser]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Create immutable preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=v1.0.0-beta.1
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Preview already exists; refusing to overwrite published asset."
+            exit 0
+          fi
+          gh release create "$TAG" ./VeyraConnect_Kur.bat \
+            --target "$GITHUB_SHA" \
+            --title "Veyra Connect v1.0.0 beta 1" \
+            --prerelease --notes-file docs/RELEASE_NOTES.md

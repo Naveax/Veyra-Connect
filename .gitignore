@@ -1,0 +1,12 @@
+# Local downloads and user runtime state
+*.download
+byedpi-*.zip
+*.log
+run_*.txt
+proxy-state.json
+dns-state.json
+config.json
+__pycache__/
+.pytest_cache/
+Thumbs.db
+.DS_Store
